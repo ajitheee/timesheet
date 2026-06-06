@@ -601,6 +601,39 @@ const STORE = {
 };
 
 // ============================================================
+// Persistence (localStorage)
+// ============================================================
+const LS_KEY = 'timeclock.v1';
+function save() {
+  try {
+    const data = {
+      currentUserId: STORE.currentUserId,
+      currentView: STORE.currentView,
+      users: STORE.users,
+      punches: STORE.punches,
+      closedPeriods: STORE.closedPeriods,
+      nextUserId: STORE.nextUserId,
+      nextPunchId: STORE.nextPunchId,
+    };
+    localStorage.setItem(LS_KEY, JSON.stringify(data));
+  } catch (e) { console.warn('save failed', e); }
+}
+function load() {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    if (data.users) STORE.users = data.users;
+    if (data.punches) STORE.punches = data.punches;
+    if (data.closedPeriods) STORE.closedPeriods = data.closedPeriods;
+    if (data.nextUserId) STORE.nextUserId = data.nextUserId;
+    if (data.nextPunchId) STORE.nextPunchId = data.nextPunchId;
+    if (data.currentUserId) STORE.currentUserId = data.currentUserId;
+    if (data.currentView) STORE.currentView = data.currentView;
+  } catch (e) { console.warn('load failed', e); }
+}
+
+// ============================================================
 // Bi-weekly pay periods (anchor: Sunday Jan 4, 2026)
 // ============================================================
 const PERIOD_ANCHOR = new Date(2026, 0, 4).getTime();
@@ -1003,6 +1036,7 @@ function render() {
   document.getElementById('managerView').classList.toggle('active', hasUsers && STORE.currentView === 'manager');
   populateUsers();
   if (hasUsers) { renderEmployee(); renderManager(); }
+  save();
 }
 
 // ============================================================
@@ -1057,7 +1091,8 @@ function saveEdit() {
 setInterval(()=>{ if (STORE.currentView==='employee' && STORE.currentUserId) renderEmployee(); }, 30000);
 
 // Init
-setView('employee');
+load();
+setView(STORE.currentView || 'employee');
 render();
 </script>
 </body>
