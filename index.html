@@ -269,6 +269,63 @@
   .pill-open { background: var(--panel-2); color: var(--muted); border:1px solid var(--border); }
 
   /* ===== Manager view ===== */
+  .ts-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px 20px;
+    margin-bottom: 14px;
+    box-shadow: var(--shadow);
+  }
+  .ts-head {
+    display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;
+    margin-bottom: 14px;
+  }
+  .ts-name { font-size: 17px; font-weight: 700; margin: 0 0 4px 0; }
+  .ts-stats { display:flex; gap:14px; flex-wrap:wrap; font-size: 13px; color: var(--muted); }
+  .ts-stats b { color: var(--text); font-weight: 700; }
+  .ts-actions { display:flex; gap:6px; flex-wrap:wrap; }
+  .ts-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 6px;
+    margin-bottom: 12px;
+  }
+  .ts-day {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 4px;
+    text-align: center;
+    min-height: 56px;
+    display:flex; flex-direction:column; justify-content:space-between;
+  }
+  .ts-day.worked { background: var(--green-soft); border-color: #6ee7b7; }
+  .ts-day.today  { background: var(--blue-soft); border-color: #93c5fd; }
+  .ts-day .dow { font-size: 10px; color: var(--muted); font-weight: 700; text-transform: uppercase; }
+  .ts-day .dnum { font-size: 13px; font-weight: 700; }
+  .ts-day .dhrs { font-size: 11px; color: var(--muted); font-weight: 700; }
+  .ts-day.worked .dhrs { color: #047857; }
+  details.ts-details { margin-top: 8px; }
+  details.ts-details > summary { cursor: pointer; color: var(--accent); font-size: 13px; font-weight: 600; list-style: none; user-select: none; }
+  details.ts-details > summary::-webkit-details-marker { display: none; }
+  details.ts-details > summary::before { content: '▶ '; font-size: 10px; transition: transform 0.15s; display: inline-block; }
+  details.ts-details[open] > summary::before { transform: rotate(90deg); }
+  .ts-punch {
+    display:flex; justify-content:space-between; align-items:center;
+    padding: 8px 0; border-bottom: 1px solid var(--border); gap: 8px;
+    font-size: 13px;
+  }
+  .ts-punch:last-child { border-bottom: none; }
+  .ts-punch-info { display:flex; align-items:center; gap: 10px; flex: 1; min-width: 0; }
+  .ts-punch-icon { width:24px; height:24px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:11px; flex-shrink:0; }
+  .ts-punch-icon.in { background: var(--green-soft); color: #047857; }
+  .ts-punch-icon.out { background: var(--red-soft); color: #b91c1c; }
+  .ts-punch-text { min-width: 0; flex: 1; }
+  .ts-punch-time { font-weight: 600; }
+  .ts-punch-meta { color: var(--muted); font-size: 12px; }
+  .ts-punch-actions { display:flex; gap: 4px; flex-shrink: 0; flex-wrap: wrap; }
+
   .period-banner {
     background: var(--panel);
     border: 1px solid var(--border);
@@ -539,18 +596,15 @@
     <div class="section-title">Flagged punches</div>
     <div id="flaggedPunches"></div>
 
-    <div class="section-title">Timesheets</div>
+    <div class="section-title">Timesheets — review &amp; approve</div>
     <div id="timesheets"></div>
-
-    <div class="section-title">All punches in period</div>
-    <div id="allPunches"></div>
   </section>
 </main>
 
 <!-- Edit punch modal -->
 <div id="editModal" class="modal-bg" onclick="if(event.target===this)closeEdit()">
   <div class="modal">
-    <h3>Edit Punch</h3>
+    <h3 id="editModalTitle">Edit Punch</h3>
     <input type="hidden" id="editId" />
     <label>Type</label>
     <select id="editType">
@@ -957,7 +1011,9 @@ function renderEmployee() {
   if (!recent.length) {
     listEl.innerHTML = '<li class="empty">No punches yet — clock in to get started.</li>';
   } else {
-    listEl.innerHTML = recent.map(p => `
+    listEl.innerHTML = recent.map(p => {
+      const periodLocked = isPeriodClosed(periodIndexFor(p.timestamp));
+      return `
       <li class="punch-item">
         <div class="punch-item-left">
           <div class="punch-icon ${p.type}">${p.type==='in'?'▶':'■'}</div>
@@ -966,11 +1022,13 @@ function renderEmployee() {
             <div class="punch-meta-2">${fmtTime(p.timestamp)}${p.lat?` · 📍 ${p.lat.toFixed(3)}, ${p.lng.toFixed(3)}`:(p.manual?' · entered manually':'')}</div>
           </div>
         </div>
-        <div>
+        <div style="display:flex; align-items:center; gap:8px;">
           <span class="pill pill-${p.status}">${p.status}</span>
-          ${p.flagged&&!p.manual?' <span class="pill pill-flagged">flagged</span>':''}
+          ${p.flagged&&!p.manual?'<span class="pill pill-flagged">flagged</span>':''}
+          ${periodLocked?'':`<button class="btn btn-ghost" onclick="openEmployeeEdit('${p.id}')" title="Modify this punch">✏️</button>`}
         </div>
-      </li>`).join('');
+      </li>`;
+    }).join('');
   }
 }
 
@@ -1048,50 +1106,89 @@ function renderManager() {
           <button class="btn" onclick="openEdit('${p.id}')">Edit</button>`}</td></tr>`).join('')}</tbody></table>`;
   }
 
-  // Timesheets
+  // Timesheets — per-employee summary card with day grid + expandable punches
   const employees = STORE.users.filter(u=>u.role==='employee');
   const tsEl = document.getElementById('timesheets');
   if (!employees.length || !periodPunches.length) {
     tsEl.innerHTML = '<div class="empty">No timesheet activity in this period.</div>';
   } else {
-    const rows = employees.map(u => {
-      const punches = periodPunches.filter(p=>p.userId===u.id).sort((a,b)=>a.timestamp-b.timestamp);
-      const { hours } = computeHoursAndDays(punches);
-      const allApproved = punches.length && punches.every(p=>p.status==='approved');
-      const anyRejected = punches.some(p=>p.status==='rejected');
-      const ts = !punches.length ? 'none' : (anyRejected ? 'rejected' : (allApproved ? 'approved' : 'pending'));
-      return { user: u, count: punches.length, hours, status: ts };
-    }).filter(r=>r.count>0);
-    tsEl.innerHTML = `<table>
-      <thead><tr><th>Employee</th><th>Punches</th><th>Hours</th><th>Status</th><th>Actions</th></tr></thead>
-      <tbody>${rows.map(r=>`<tr>
-        <td>${escapeHtml(r.user.name)}</td>
-        <td>${r.count}</td>
-        <td>${r.hours.toFixed(2)}</td>
-        <td><span class="pill pill-${r.status}">${r.status}</span></td>
-        <td>${closed?'<em style="color:var(--muted);font-size:12px;">closed</em>':`
-          <button class="btn btn-approve" onclick="approveTimesheet('${r.user.id}')">Approve Timesheet</button>
-          <button class="btn btn-reject" onclick="rejectTimesheet('${r.user.id}')">Reject</button>`}</td></tr>`).join('')}</tbody></table>`;
-  }
+    const todayStr = new Date().toDateString();
+    const cards = employees.map(u => {
+      const userPunches = periodPunches.filter(p => p.userId === u.id).sort((a,b)=>a.timestamp-b.timestamp);
+      if (!userPunches.length) return '';
+      const { hours, days } = computeHoursAndDays(userPunches);
+      const pendingCt = userPunches.filter(p=>p.status==='pending').length;
+      const flaggedCt = userPunches.filter(p=>(p.flagged||p.manual) && p.status==='pending').length;
+      const allApproved = userPunches.every(p=>p.status==='approved');
+      const anyRejected = userPunches.some(p=>p.status==='rejected');
+      const ts = anyRejected ? 'rejected' : (allApproved ? 'approved' : 'pending');
 
-  // All punches
-  const allEl = document.getElementById('allPunches');
-  const all = [...periodPunches].sort((a,b)=>b.timestamp-a.timestamp);
-  if (!all.length) {
-    allEl.innerHTML = '<div class="empty">No punches in this period.</div>';
-  } else {
-    allEl.innerHTML = `<table>
-      <thead><tr><th>Employee</th><th>Time</th><th>Type</th><th>GPS</th><th>Status</th><th>Actions</th></tr></thead>
-      <tbody>${all.map(p=>`<tr>
-        <td>${escapeHtml(userName(p.userId))}</td>
-        <td>${fmtTime(p.timestamp)}</td>
-        <td>${p.type==='in'?'In':'Out'}</td>
-        <td class="coords">${p.lat?`${p.lat.toFixed(4)}, ${p.lng.toFixed(4)}`:(p.manual?'manual':'—')}</td>
-        <td><span class="pill pill-${p.status}">${p.status}</span>${p.manual?' <span class="pill pill-closed">manual</span>':(p.flagged?' <span class="pill pill-flagged">flagged</span>':'')}</td>
-        <td>${closed?'<em style="color:var(--muted);font-size:12px;">closed</em>':(p.status==='pending'?`
-          <button class="btn btn-approve" onclick="approve('${p.id}')">Approve</button>
-          <button class="btn btn-reject" onclick="reject('${p.id}')">Reject</button>
-          <button class="btn" onclick="openEdit('${p.id}')">Edit</button>`:`<button class="btn" onclick="openEdit('${p.id}')">Edit</button>`)}</td></tr>`).join('')}</tbody></table>`;
+      // 14-day grid
+      const dayCells = [];
+      for (let i = 0; i < 14; i++) {
+        const dayStart = range.start + i * DAY_MS;
+        const d = new Date(dayStart);
+        const dayPunches = userPunches.filter(p => new Date(p.timestamp).toDateString() === d.toDateString());
+        const dayHours = computeHoursAndDays(dayPunches).hours;
+        const worked = dayHours > 0;
+        const isToday = d.toDateString() === todayStr;
+        const cls = ['ts-day']; if (isToday) cls.push('today'); else if (worked) cls.push('worked');
+        dayCells.push(`<div class="${cls.join(' ')}">
+          <div><div class="dow">${d.toLocaleDateString('en-US',{weekday:'short'})}</div><div class="dnum">${d.getDate()}</div></div>
+          <div class="dhrs">${worked?dayHours.toFixed(1)+'h':'—'}</div></div>`);
+      }
+
+      // Inline punches (collapsed)
+      const punchRows = userPunches.map(p => `
+        <div class="ts-punch">
+          <div class="ts-punch-info">
+            <div class="ts-punch-icon ${p.type}">${p.type==='in'?'▶':'■'}</div>
+            <div class="ts-punch-text">
+              <div class="ts-punch-time">${p.type==='in'?'Clock In':'Clock Out'} · ${fmtTime(p.timestamp)}</div>
+              <div class="ts-punch-meta">
+                <span class="pill pill-${p.status}">${p.status}</span>
+                ${p.manual?' <span class="pill pill-closed">manual</span>':''}
+                ${p.flagged&&!p.manual?' <span class="pill pill-flagged">flagged</span>':''}
+                ${p.lat?` · 📍 ${p.lat.toFixed(3)}, ${p.lng.toFixed(3)}`:''}
+                ${p.flagReason?` · ${escapeHtml(p.flagReason)}`:''}
+              </div>
+            </div>
+          </div>
+          <div class="ts-punch-actions">
+            ${closed?'':(p.status==='pending'?`
+              <button class="btn btn-approve" onclick="approve('${p.id}')">✓</button>
+              <button class="btn btn-reject" onclick="reject('${p.id}')">✗</button>`:'')}
+            ${closed?'':`<button class="btn" onclick="openEdit('${p.id}')">Edit</button>`}
+          </div>
+        </div>`).join('');
+
+      return `<div class="ts-card">
+        <div class="ts-head">
+          <div>
+            <h3 class="ts-name">${escapeHtml(u.name)}</h3>
+            <div class="ts-stats">
+              <span><b>${hours.toFixed(1)}h</b> hours</span>
+              <span><b>${days}</b> days worked</span>
+              <span><b>${userPunches.length}</b> punches</span>
+              ${pendingCt?`<span style="color:var(--yellow)"><b>${pendingCt}</b> pending</span>`:''}
+              ${flaggedCt?`<span style="color:var(--red)"><b>${flaggedCt}</b> need review</span>`:''}
+              <span class="pill pill-${ts}">${ts}</span>
+            </div>
+          </div>
+          <div class="ts-actions">
+            ${closed?'<em style="color:var(--muted);font-size:12px;">period closed</em>':`
+              <button class="btn btn-approve" onclick="approveTimesheet('${u.id}')" ${pendingCt===0?'disabled style="opacity:0.5;"':''}>✓ Approve Whole Timesheet${pendingCt?` (${pendingCt})`:''}</button>
+              <button class="btn btn-reject" onclick="rejectTimesheet('${u.id}')">Reject All</button>`}
+          </div>
+        </div>
+        <div class="ts-grid">${dayCells.join('')}</div>
+        <details class="ts-details">
+          <summary>View all ${userPunches.length} punches</summary>
+          <div style="margin-top:8px;">${punchRows}</div>
+        </details>
+      </div>`;
+    }).filter(c=>c).join('');
+    tsEl.innerHTML = cards || '<div class="empty">No timesheet activity in this period.</div>';
   }
 }
 
@@ -1114,19 +1211,26 @@ function approve(id) { const p=findPunch(id); if(!p) return; p.status='approved'
 function reject(id) { const p=findPunch(id); if(!p) return; p.status='rejected'; logAudit(p,'Rejected'); render(); }
 function approveTimesheet(userId) {
   const range = periodRange(STORE.viewingPeriod);
-  STORE.punches.forEach(p=>{ if(p.userId===userId && p.timestamp>=range.start && p.timestamp<range.end){ p.status='approved'; logAudit(p,'Approved (timesheet)'); }});
+  const targets = STORE.punches.filter(p => p.userId===userId && p.timestamp>=range.start && p.timestamp<range.end && p.status==='pending');
+  if (!targets.length) { alert('No pending punches to approve.'); return; }
+  if (!confirm(`Approve all ${targets.length} pending punch(es) for ${userName(userId)} in this period?`)) return;
+  targets.forEach(p => { p.status='approved'; logAudit(p,'Approved (whole timesheet)'); });
   render();
 }
 function rejectTimesheet(userId) {
   const range = periodRange(STORE.viewingPeriod);
-  STORE.punches.forEach(p=>{ if(p.userId===userId && p.timestamp>=range.start && p.timestamp<range.end){ p.status='rejected'; logAudit(p,'Rejected (timesheet)'); }});
+  const targets = STORE.punches.filter(p => p.userId===userId && p.timestamp>=range.start && p.timestamp<range.end && p.status==='pending');
+  if (!targets.length) { alert('No pending punches to reject.'); return; }
+  if (!confirm(`Reject all ${targets.length} pending punch(es) for ${userName(userId)} in this period?`)) return;
+  targets.forEach(p => { p.status='rejected'; logAudit(p,'Rejected (whole timesheet)'); });
   render();
 }
 
 // ============================================================
 // Edit modal
 // ============================================================
-function openEdit(id) {
+let _editContext = 'manager'; // 'manager' | 'employee'
+function _fillEditModal(id) {
   const p = findPunch(id); if (!p) return;
   document.getElementById('editId').value = id;
   document.getElementById('editType').value = p.type;
@@ -1138,6 +1242,12 @@ function openEdit(id) {
   log.innerHTML = p.audit.length ? p.audit.map(a=>`<li>${fmtTime(a.ts)} — ${escapeHtml(a.by)}: ${escapeHtml(a.action)}</li>`).join('') : '<li>No edits yet.</li>';
   document.getElementById('editModal').classList.add('active');
 }
+function openEdit(id) { _editContext = 'manager'; document.getElementById('editModalTitle').textContent = 'Edit Punch'; _fillEditModal(id); }
+function openEmployeeEdit(id) {
+  _editContext = 'employee';
+  document.getElementById('editModalTitle').textContent = 'Modify Your Punch (needs manager approval)';
+  _fillEditModal(id);
+}
 function closeEdit() { document.getElementById('editModal').classList.remove('active'); }
 function saveEdit() {
   const id = document.getElementById('editId').value;
@@ -1147,10 +1257,21 @@ function saveEdit() {
   const newType = document.getElementById('editType').value;
   const newTs = new Date(document.getElementById('editTime').value).getTime();
   if (isNaN(newTs)) { alert('Invalid time.'); return; }
+  if (newTs > Date.now()) { alert('Time cannot be in the future.'); return; }
+  if (isPeriodClosed(periodIndexFor(newTs))) { alert('That date is in a closed pay period.'); return; }
   const oldType = p.type, oldTs = p.timestamp;
   p.type = newType; p.timestamp = newTs;
-  logAudit(p, `Edited: ${oldType}→${newType}, ${fmtTime(oldTs)}→${fmtTime(newTs)}. Reason: ${reason}`);
+  if (_editContext === 'employee') {
+    // Employee edits reset approval — manager needs to re-verify
+    p.status = 'pending';
+    p.flagged = true;
+    p.flagReason = 'Modified by employee: ' + reason;
+    logAudit(p, `Employee modified: ${oldType}→${newType}, ${fmtTime(oldTs)}→${fmtTime(newTs)}. Reason: ${reason}`);
+  } else {
+    logAudit(p, `Manager edited: ${oldType}→${newType}, ${fmtTime(oldTs)}→${fmtTime(newTs)}. Reason: ${reason}`);
+  }
   closeEdit(); render();
+  if (_editContext === 'employee') alert('Submitted. Your manager will review the change.');
 }
 
 // Refresh employee timer every 30s for live "on the clock" duration
