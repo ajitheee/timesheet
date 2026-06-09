@@ -466,6 +466,9 @@
         <div class="live-clock" id="liveClock">--:--:--</div>
         <button id="punchBtn" class="punch-btn" onclick="punch()">Clock In</button>
         <div id="geoStatus" class="geo-status">📍 GPS captured when you punch</div>
+        <div style="margin-top:18px;">
+          <button class="btn btn-ghost" onclick="openManualEntry()">+ Add missed clock in/out</button>
+        </div>
       </div>
     </div>
 
@@ -563,6 +566,29 @@
     <div class="modal-actions">
       <button class="btn" onclick="closeEdit()">Cancel</button>
       <button class="btn btn-approve" onclick="saveEdit()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Manual punch entry modal -->
+<div id="manualModal" class="modal-bg" onclick="if(event.target===this)closeManualEntry()">
+  <div class="modal">
+    <h3>Add Missed Punch</h3>
+    <p style="color:var(--muted); font-size:13px; margin:0 0 4px 0;">
+      This will be submitted as pending — your manager needs to approve it before it counts toward your hours.
+    </p>
+    <label>Type</label>
+    <select id="manualType">
+      <option value="in">Clock In</option>
+      <option value="out">Clock Out</option>
+    </select>
+    <label>When did this happen?</label>
+    <input type="datetime-local" id="manualTime" />
+    <label>Reason (required)</label>
+    <textarea id="manualReason" rows="2" placeholder="e.g. Forgot to clock out yesterday"></textarea>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeManualEntry()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveManualEntry()">Submit for Approval</button>
     </div>
   </div>
 </div>
@@ -773,11 +799,51 @@ function punch() {
 }
 
 // ============================================================
+// Manual punch entry (missed clock in/out — needs manager approval)
+// ============================================================
+function openManualEntry() {
+  if (!STORE.currentUserId) { alert('Add a person first.'); return; }
+  const now = new Date();
+  const pad = n => String(n).padStart(2,'0');
+  document.getElementById('manualType').value = 'in';
+  document.getElementById('manualTime').value =
+    `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  document.getElementById('manualReason').value = '';
+  document.getElementById('manualModal').classList.add('active');
+}
+function closeManualEntry() { document.getElementById('manualModal').classList.remove('active'); }
+function saveManualEntry() {
+  const type = document.getElementById('manualType').value;
+  const ts = new Date(document.getElementById('manualTime').value).getTime();
+  const reason = document.getElementById('manualReason').value.trim();
+  if (isNaN(ts)) { alert('Pick a valid time.'); return; }
+  if (!reason) { alert('Reason is required.'); return; }
+  if (ts > Date.now()) { alert('Time cannot be in the future.'); return; }
+  const periodIdx = periodIndexFor(ts);
+  if (isPeriodClosed(periodIdx)) { alert('That date is in a closed pay period.'); return; }
+  STORE.punches.push({
+    id: 'p' + (STORE.nextPunchId++),
+    userId: STORE.currentUserId,
+    type, timestamp: ts,
+    lat: null, lng: null, accuracy: null,
+    status: 'pending',
+    flagged: true,
+    flagReason: 'Manual entry: ' + reason,
+    manual: true,
+    audit: [{ ts: Date.now(), by: userName(STORE.currentUserId), action: 'Submitted manual entry — reason: ' + reason }],
+  });
+  closeManualEntry();
+  render();
+  alert('Submitted. Your manager will review and approve it.');
+}
+
+// ============================================================
 // Employee view
 // ============================================================
 function computeHoursAndDays(punches) {
-  // sort ascending
-  const sorted = [...punches].sort((a,b)=>a.timestamp-b.timestamp);
+  // Skip manual entries until approved — they don't count toward hours/days yet
+  const eligible = punches.filter(p => !(p.manual && p.status !== 'approved') && p.status !== 'rejected');
+  const sorted = [...eligible].sort((a,b)=>a.timestamp-b.timestamp);
   let hours = 0;
   let lastIn = null;
   const daysSet = new Set();
@@ -896,13 +962,13 @@ function renderEmployee() {
         <div class="punch-item-left">
           <div class="punch-icon ${p.type}">${p.type==='in'?'▶':'■'}</div>
           <div>
-            <div class="punch-meta-1">${p.type==='in'?'Clocked In':'Clocked Out'}</div>
-            <div class="punch-meta-2">${fmtTime(p.timestamp)}${p.lat?` · 📍 ${p.lat.toFixed(3)}, ${p.lng.toFixed(3)}`:''}</div>
+            <div class="punch-meta-1">${p.type==='in'?'Clocked In':'Clocked Out'}${p.manual?' <span class="pill pill-closed" style="margin-left:6px;">manual</span>':''}</div>
+            <div class="punch-meta-2">${fmtTime(p.timestamp)}${p.lat?` · 📍 ${p.lat.toFixed(3)}, ${p.lng.toFixed(3)}`:(p.manual?' · entered manually':'')}</div>
           </div>
         </div>
         <div>
           <span class="pill pill-${p.status}">${p.status}</span>
-          ${p.flagged?' <span class="pill pill-flagged">flagged</span>':''}
+          ${p.flagged&&!p.manual?' <span class="pill pill-flagged">flagged</span>':''}
         </div>
       </li>`).join('');
   }
@@ -1020,8 +1086,8 @@ function renderManager() {
         <td>${escapeHtml(userName(p.userId))}</td>
         <td>${fmtTime(p.timestamp)}</td>
         <td>${p.type==='in'?'In':'Out'}</td>
-        <td class="coords">${p.lat?`${p.lat.toFixed(4)}, ${p.lng.toFixed(4)}`:'—'}</td>
-        <td><span class="pill pill-${p.status}">${p.status}</span>${p.flagged?' <span class="pill pill-flagged">flagged</span>':''}</td>
+        <td class="coords">${p.lat?`${p.lat.toFixed(4)}, ${p.lng.toFixed(4)}`:(p.manual?'manual':'—')}</td>
+        <td><span class="pill pill-${p.status}">${p.status}</span>${p.manual?' <span class="pill pill-closed">manual</span>':(p.flagged?' <span class="pill pill-flagged">flagged</span>':'')}</td>
         <td>${closed?'<em style="color:var(--muted);font-size:12px;">closed</em>':(p.status==='pending'?`
           <button class="btn btn-approve" onclick="approve('${p.id}')">Approve</button>
           <button class="btn btn-reject" onclick="reject('${p.id}')">Reject</button>
